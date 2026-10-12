@@ -1,0 +1,295 @@
+{
+  "name": "Auto Posting Scheduler Dengan n8n",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "id": "a0238dc7-4913-4e4f-89b8-ec805d9baf86",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1lz6j1mPm9rAu3dcD3umlhtdqM-qj0oDZTjJfNnWVDoc",
+          "mode": "list",
+          "cachedResultName": "Copy of Auto Posting Scheduler",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1lz6j1mPm9rAu3dcD3umlhtdqM-qj0oDZTjJfNnWVDoc/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1lz6j1mPm9rAu3dcD3umlhtdqM-qj0oDZTjJfNnWVDoc/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        224,
+        0
+      ],
+      "id": "acacf7de-a3a9-4ffd-adb6-6462b1467ebd",
+      "name": "Ambil Data Posting",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "WLgbadnW44dmo6Iu",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code node mode: Run Once for All Items\n// DEBUG = false: hanya keluarkan baris Pending yang sudah jatuh tempo.\n// DEBUG = true : keluarkan semua baris beserta alasan kenapa diproses/dilewati.\nconst DEBUG = false;\nconst ZONE = 'Asia/Jakarta';\nconst items = $input.all();\nconst now = DateTime.now().setZone(ZONE);\n\nfunction normalizeKey(value) {\n  return String(value ?? '').trim().toLowerCase().replace(/[\\s_-]+/g, '');\n}\n\nfunction getField(row, fieldName) {\n  const wanted = normalizeKey(fieldName);\n  const key = Object.keys(row).find(k => normalizeKey(k) === wanted);\n  return key === undefined ? undefined : row[key];\n}\n\nfunction invalidDate() {\n  return DateTime.invalid('Unrecognized date/time value');\n}\n\nfunction parseDate(value) {\n  if (value === undefined || value === null || String(value).trim() === '') return invalidDate();\n\n  // Google Sheets serial date: integer days since 1899-12-30.\n  if (typeof value === 'number' && Number.isFinite(value)) {\n    const base = DateTime.fromObject({ year: 1899, month: 12, day: 30 }, { zone: ZONE });\n    return base.plus({ days: Math.floor(value) }).startOf('day');\n  }\n\n  if (value instanceof Date) {\n    const parsed = DateTime.fromJSDate(value, { zone: ZONE });\n    return parsed.isValid ? parsed.startOf('day') : invalidDate();\n  }\n\n  const s = String(value).trim();\n  const iso = DateTime.fromISO(s, { zone: ZONE });\n  if (iso.isValid) return iso.startOf('day');\n\n  // Prioritas format Indonesia: dd/MM/yyyy, kemudian format umum lainnya.\n  const formats = [\n    'd/M/yyyy', 'dd/MM/yyyy',\n    'd-M-yyyy', 'dd-MM-yyyy',\n    'yyyy/M/d', 'yyyy-MM-dd',\n    'M/d/yyyy', 'MM/dd/yyyy',\n    'd.M.yyyy', 'dd.MM.yyyy'\n  ];\n  for (const format of formats) {\n    const parsed = DateTime.fromFormat(s, format, { zone: ZONE, locale: 'en' });\n    if (parsed.isValid) return parsed.startOf('day');\n  }\n\n  // Numeric serial date sometimes arrives as a string.\n  if (/^\\d+(?:\\.\\d+)?$/.test(s)) {\n    const serial = Number(s);\n    if (Number.isFinite(serial) && serial >= 1) {\n      const base = DateTime.fromObject({ year: 1899, month: 12, day: 30 }, { zone: ZONE });\n      return base.plus({ days: Math.floor(serial) }).startOf('day');\n    }\n  }\n  return invalidDate();\n}\n\nfunction parseTime(value) {\n  if (value === undefined || value === null || String(value).trim() === '') return null;\n\n  // Google Sheets time serial: fraction of a 24-hour day (e.g. 0.5 = 12:00).\n  if (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value < 1) {\n    let seconds = Math.round(value * 86400) % 86400;\n    return {\n      hour: Math.floor(seconds / 3600),\n      minute: Math.floor((seconds % 3600) / 60),\n      second: seconds % 60,\n      millisecond: 0\n    };\n  }\n\n  let s = String(value).trim();\n  if (/^\\d+(?:\\.\\d+)?$/.test(s)) {\n    const numeric = Number(s);\n    if (Number.isFinite(numeric) && numeric >= 0 && numeric < 1) {\n      let seconds = Math.round(numeric * 86400) % 86400;\n      return {\n        hour: Math.floor(seconds / 3600),\n        minute: Math.floor((seconds % 3600) / 60),\n        second: seconds % 60,\n        millisecond: 0\n      };\n    }\n  }\n\n  if (/^\\d{1,2}\\.\\d{2}(?:\\.\\d{2})?$/.test(s)) s = s.replace(/\\./g, ':');\n  const upper = s.toUpperCase().replace(/\\s+/g, ' ');\n  const iso = DateTime.fromISO(`1970-01-01T${s}`, { zone: ZONE });\n  if (iso.isValid) {\n    return { hour: iso.hour, minute: iso.minute, second: iso.second, millisecond: iso.millisecond };\n  }\n\n  const formats = [\n    'H:mm', 'HH:mm', 'H:mm:ss', 'HH:mm:ss',\n    'h:mm a', 'hh:mm a', 'h:mm:ss a', 'hh:mm:ss a',\n    'h a', 'hh a'\n  ];\n  for (const format of formats) {\n    const parsed = DateTime.fromFormat(upper, format, { zone: ZONE, locale: 'en' });\n    if (parsed.isValid) {\n      return { hour: parsed.hour, minute: parsed.minute, second: parsed.second, millisecond: parsed.millisecond };\n    }\n  }\n  return null;\n}\n\nfunction describeDateTime(dt) {\n  return dt && dt.isValid ? dt.toISO() : null;\n}\n\nif (items.length === 0) {\n  return DEBUG ? [{ json: { _schedulerDebug: 'Tidak ada item masuk dari Google Sheets. Periksa output node Get row(s) in sheet.' } }] : [];\n}\n\nconst dueItems = [];\nconst debugItems = [];\n\nitems.forEach((item, index) => {\n  const row = item.json ?? {};\n  const rawStatus = getField(row, 'Status');\n  const rawDate = getField(row, 'Scheduled Date');\n  const rawTime = getField(row, 'Scheduled Time');\n  const status = String(rawStatus ?? '').trim().toLowerCase();\n  const date = parseDate(rawDate);\n  const time = parseTime(rawTime);\n\n  let scheduled = null;\n  let reason = '';\n  let isDue = false;\n\n  if (status !== 'pending') {\n    reason = `Status bukan Pending (nilai terbaca: ${String(rawStatus ?? '(kosong)')})`;\n  } else if (rawDate === undefined || rawDate === null || String(rawDate).trim() === '') {\n    reason = 'Kolom Scheduled Date kosong/tidak ditemukan. Periksa nama header di Google Sheets.';\n  } else if (!date.isValid) {\n    reason = `Scheduled Date tidak bisa diparse: ${String(rawDate)}`;\n  } else if (rawTime === undefined || rawTime === null || String(rawTime).trim() === '') {\n    reason = 'Kolom Scheduled Time kosong/tidak ditemukan. Periksa nama header di Google Sheets.';\n  } else if (!time) {\n    reason = `Scheduled Time tidak bisa diparse: ${String(rawTime)}`;\n  } else {\n    scheduled = date.set(time).setZone(ZONE);\n    isDue = scheduled.isValid && scheduled.toMillis() <= now.toMillis();\n    reason = !scheduled.isValid\n      ? 'Gabungan tanggal dan waktu tidak valid.'\n      : isDue\n        ? 'READY: status Pending dan jadwal sudah jatuh tempo.'\n        : `Belum waktunya; jadwal ${scheduled.toFormat('yyyy-LL-dd HH:mm:ss')} WIB, sekarang ${now.toFormat('yyyy-LL-dd HH:mm:ss')} WIB.`;\n  }\n\n  if (isDue) dueItems.push(item);\n\n  if (DEBUG) {\n    debugItems.push({\n      json: {\n        ...row,\n        _schedulerDebug: {\n          inputItem: index,\n          statusRead: rawStatus ?? null,\n          scheduledDateRead: rawDate ?? null,\n          scheduledTimeRead: rawTime ?? null,\n          parsedScheduledAt: describeDateTime(scheduled),\n          nowJakarta: now.toISO(),\n          isDue,\n          reason\n        }\n      },\n      pairedItem: { item: index }\n    });\n  }\n});\n\nreturn DEBUG ? debugItems : dueItems;\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "dac111b9-e186-4ead-9395-348ebd739efa",
+      "name": "Filter Ready Posts"
+    },
+    {
+      "parameters": {
+        "chatId": "7737090828",
+        "text": "={{ $json.Content }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        672,
+        0
+      ],
+      "id": "436a49cb-83f8-4336-abd2-ec9b33cf8dfe",
+      "name": "Send a text message",
+      "webhookId": "698a217d-972d-4933-a259-a29c6d9bdbf1",
+      "credentials": {
+        "telegramApi": {
+          "id": "cHwAeaQAY8vUvSlr",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5ace7494-3cf4-48ee-b3b6-83b07adcde9d",
+              "name": "row_number",
+              "value": "={{ $('Filter Ready Posts').item.json.row_number }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        896,
+        0
+      ],
+      "id": "0573ab45-e303-44d2-899b-fe6a6da94235",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1lz6j1mPm9rAu3dcD3umlhtdqM-qj0oDZTjJfNnWVDoc",
+          "mode": "list",
+          "cachedResultName": "Copy of Auto Posting Scheduler",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1lz6j1mPm9rAu3dcD3umlhtdqM-qj0oDZTjJfNnWVDoc/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1lz6j1mPm9rAu3dcD3umlhtdqM-qj0oDZTjJfNnWVDoc/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ID": "={{ $('Filter Ready Posts').item.json.ID }}",
+            "Status": "Published"
+          },
+          "matchingColumns": [
+            "ID"
+          ],
+          "schema": [
+            {
+              "id": "ID",
+              "displayName": "ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Content",
+              "displayName": "Content",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Scheduled Date",
+              "displayName": "Scheduled Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Scheduled Time",
+              "displayName": "Scheduled Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1120,
+        0
+      ],
+      "id": "4a0d6d70-f7a8-4660-b0bb-c1bd5957c01f",
+      "name": "Update row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "WLgbadnW44dmo6Iu",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Ambil Data Posting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Data Posting": {
+      "main": [
+        [
+          {
+            "node": "Filter Ready Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Ready Posts": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Update row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "1739db6c-2395-496f-b3ab-8a2d5f1e552c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "dc96f10ae7dc95d3c138575ba243a0a167923dbcb524841d451aadf9135d5fb3"
+  },
+  "nodeGroups": [],
+  "id": "LTTzAKGVuMqKGfiU",
+  "tags": []
+}
